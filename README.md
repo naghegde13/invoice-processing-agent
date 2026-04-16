@@ -20,8 +20,8 @@ Invoice File (TXT / JSON / CSV / XML / PDF)
         ↓
   SQLite Audit Log + summary_report.txt
 
-![Architecture Diagram](architecture.png)
 ```
+![Architecture Diagram](architecture.png)
 
 ## Setup
 
