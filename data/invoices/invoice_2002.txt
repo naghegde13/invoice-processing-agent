@@ -1,0 +1,18 @@
+INVOICE
+
+Vendor: Mixed Bag Supplies
+Invoice Number: INV-2002
+Date: 2026-04-14
+Due Date: 2026-05-14
+
+Items:
+  WidgetA       qty: 5     unit price: $250.00
+  UnknownPart   qty: 3     unit price: $400.00
+  GadgetX       qty: 2     unit price: $750.00
+  MysteryItem   qty: 10    unit price: $100.00
+
+Subtotal: $4,250.00
+Tax (0%): $0.00
+Total: $4,250.00
+
+Payment Terms: Net 30

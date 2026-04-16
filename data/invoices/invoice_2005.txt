@@ -1,0 +1,16 @@
+INVOICE
+
+Vendor: Date Format Industries
+Invoice Number: INV-2005
+Date: 14/04/2026
+Due Date: 14-May-2026
+
+Items:
+  Widget A    qty: 3    unit price: $250.00
+  Gadget X    qty: 2    unit price: $750.00
+
+Subtotal: $2,250.00
+Tax (5%): $112.50
+Total: $2,362.50
+
+Payment Terms: Net 30
