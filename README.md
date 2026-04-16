@@ -19,6 +19,8 @@ Invoice File (TXT / JSON / CSV / XML / PDF)
  [Payment Agent]      mock_payment() if approved — structured rejection log if rejected
         ↓
   SQLite Audit Log + summary_report.txt
+
+![Architecture Diagram](architecture.png)
 ```
 
 ## Setup
