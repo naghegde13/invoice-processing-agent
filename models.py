@@ -16,5 +16,8 @@ class InvoiceState(TypedDict):
     payment:      Optional[dict]
     fraud:        Optional[dict]
     status:       str
+    # Annotated[List[str], operator.add]: LangGraph accumulates list items across agent returns
+    # Each agent appends to errors[] and log[]; framework merges via operator.add (concatenation)
+    # Without this, last agent's list would overwrite prior agents' entries
     errors:       Annotated[List[str], operator.add]
     log:          Annotated[List[str], operator.add]
