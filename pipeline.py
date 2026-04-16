@@ -29,14 +29,18 @@ def load_invoice_text(path: str) -> str:
 
 
 def route_after_validation(state: InvoiceState) -> str:
-    """Always go to approval - approval agent handles flagged invoices too."""
+    """
+    Route after validation: validation always passes to approval for decision.
+    Approval agent handles both flagged and clean invoices—it's the centralized risk decision point.
+    Error status (invalid data) also goes to payment (which logs rejection and doesn't pay).
+    """
     if state.get("status") == "error":
         return "payment"
     return "approval"
 
 
 def route_after_approval(state: InvoiceState) -> str:
-    """Always go to payment - payment agent handles both approved and rejected."""
+    """Always route to payment - payment agent handles both approved and rejected outcomes."""
     return "payment"
 
 
@@ -51,6 +55,9 @@ def build_pipeline():
 
     graph.set_entry_point("ingestion")
     graph.add_edge("ingestion", "fraud_check")
+    
+    # Fraud fast-reject: high-risk invoices bypass validation/approval and go straight to payment
+    # Payment agent logs rejection without further processing, preventing downstream abuse
     graph.add_conditional_edges(
         "fraud_check",
         lambda state: "payment" if state.get("status") == "rejected" else "validation",
@@ -71,6 +78,7 @@ def build_pipeline():
     return graph.compile()
 
 def is_duplicate(invoice_number: str) -> bool:
+    # Check if invoice number already exists in processing log (prevents reprocessing)
     if not invoice_number:
         return False
     conn = sqlite3.connect(DB_PATH)
@@ -94,19 +102,29 @@ def process_invoice(invoice_path: str) -> dict:
         "log":          [f"[Pipeline] Processing: {invoice_path}"],
     }
 
-    # Duplicate detection before running pipeline
+    # Duplicate detection strategy:
+    # 1. Extract invoice number from filename (e.g., invoice_1001.txt -> INV-1001)
+    # 2. Check if it's a revision (JSON with "revision": true field)
+    # 3. Skip duplicate check for revisions (allow override of original)
+    # 4. For non-revisions, reject if already in processing log
     
+    # Extract invoice number from filename pattern: invoice_XXXX.ext -> INV-XXXX
     raw_inv_num = normalize_invoice_number(
         os.path.splitext(os.path.basename(invoice_path))[0].replace("invoice_", "").upper()
     )
+    
+    # Detect revision: parse JSON content to check for explicit "revision": true marker
+    # Revisions bypass duplicate check (allow reprocessing updated versions)
     is_revision = False
     try:
         data = json.loads(initial_state["raw_text"])
         if data.get("revision"):
             is_revision = True
     except Exception:
+        # Non-JSON formats (TXT, CSV) have no revision marker, treat as non-revision
         pass
 
+    # Fast-reject path: duplicate non-revision invoice
     if not is_revision and is_duplicate(raw_inv_num):
         return {
             "invoice_path": invoice_path,
@@ -120,5 +138,6 @@ def process_invoice(invoice_path: str) -> dict:
             "log": [f"[Pipeline] DUPLICATE DETECTED: {raw_inv_num} already in processing log"],
         }
 
+    # Execute pipeline through LangGraph
     app = build_pipeline()
     return app.invoke(initial_state)

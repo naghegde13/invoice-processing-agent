@@ -149,8 +149,11 @@ def process_xml(raw_text: str) -> str:
 def process_csv(raw_text: str) -> str:
     """
     Handle two CSV formats:
-    1. Vertical key-value: field,value
-    2. Horizontal tabular: Invoice Number,Vendor,Date,...,Item,Qty,...
+    1. Vertical key-value: field,value (stacked key-value pairs, items accumulate as current_item state)
+    2. Horizontal tabular: Invoice Number,Vendor,Date,...,Item,Qty,... (one row per line item)
+    
+    Format detection: first row = ["field", "value"] -> vertical; otherwise horizontal with headers.
+    Horizontal uses flexible header matching (col() helper) to tolerate column order variations.
     """
     try:
         reader = csv.reader(io.StringIO(raw_text.strip()))
@@ -162,6 +165,7 @@ def process_csv(raw_text: str) -> str:
         first_row = [c.strip().lower() for c in rows[0]]
 
         # Vertical key-value format (field, value)
+        # State machine: accumulate item attributes (qty, price) as we see them, flush to items[] when new item encountered
         if first_row[:2] == ["field", "value"]:
             kv = {}
             items = []
@@ -172,6 +176,7 @@ def process_csv(raw_text: str) -> str:
                 key = row[0].strip().lower()
                 val = row[1].strip()
                 if key == "item":
+                    # Item key triggers flush of previous item (if any) and starts new item
                     if current_item:
                         items.append(current_item)
                     current_item = {"name": normalize_item_name(val)}
@@ -205,6 +210,8 @@ def process_csv(raw_text: str) -> str:
         data_rows = rows[1:]
 
         def col(row, *names):
+            # Flexible header matching: searches for substring match in header names
+            # Tolerates column reordering and handles headers like "Unit Price", "unit_price", "UnitPrice" uniformly
             for name in names:
                 for i, h in enumerate(headers):
                     if name in h and i < len(row):
@@ -277,13 +284,14 @@ def process_pdf(invoice_path: str) -> str:
 
 def normalize_text(raw_text: str) -> str:
     """
-    Light normalization of plain text invoices:
-    - Normalize item names with spaces
-    - Replace letter O that looks like zero in dates (2O26 -> 2026)
+    Light normalization of plain text invoices before LLM:
+    - Fix OCR errors: letter O misread as zero in years (2O26 -> 2026)
+    - Normalize item names with spaces to canonical form (Widget A -> WidgetA)
+    Runs before LLM to reduce extraction variance from OCR/format noise.
     """
-    # Fix OCR/typo: letter O instead of 0 in years
+    # OCR correction: dates like '2O26' or '1O23' where O is mistaken for 0
     text = re.sub(r'\b(2[0O]2[0-9])\b', lambda m: m.group(0).replace('O', '0'), raw_text)
-    # Normalize spaced item names
+    # Normalize spaced item names to match validation inventory (Widget A -> WidgetA)
     for spaced, joined in [("Widget A", "WidgetA"), ("Widget B", "WidgetB"), ("Gadget X", "GadgetX")]:
         text = re.sub(re.escape(spaced), joined, text, flags=re.IGNORECASE)
     return text
@@ -393,7 +401,9 @@ def run_ingestion(state: dict) -> dict:
             "errors": errors,
         }
 
-    # Step 3: Self-correction loop if confidence is low
+    # Step 3: Confidence-based self-correction
+    # Threshold 0.75: low confidence (messy invoice, many variants) triggers second LLM pass
+    # Critique LLM catches: missed nested fields (vendor.name), item name inconsistencies, quantity formats
     confidence = extracted.get("extraction_confidence", 1.0)
     if confidence < 0.75:
         log.append(f"[Ingestion] Low confidence ({confidence}), running critique pass...")
@@ -410,8 +420,11 @@ def run_ingestion(state: dict) -> dict:
         except Exception as e:
             log.append(f"[Ingestion] Critique pass failed ({e}), using initial extraction")
 
-    # Step 4: Post-LLM normalization to catch anything the LLM missed
-    # Normalize invoice number
+    # Step 4: Post-LLM deterministic normalization
+    # Override LLM outputs with canonical forms to handle format variations LLM might miss:
+    # - Invoice numbers like 'INV 1002' or bare '1002' -> 'INV-1002'
+    # - Nested vendor objects (vendor.name) -> flat string
+    # - Item names with spaces or case variants -> standard form
     extracted["invoice_number"] = normalize_invoice_number(
         str(extracted.get("invoice_number", ""))
     )

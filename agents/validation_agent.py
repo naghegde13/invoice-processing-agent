@@ -29,6 +29,12 @@ def run_validation(state: dict) -> dict:
     """
     Reads:   extracted
     Returns: validation, status, log, errors
+    
+    Validation strategy:
+    1. Separate invalid quantities (data integrity) from valid items
+    2. Aggregate quantities per item (handles multi-line same items)
+    3. Check aggregated quantities against inventory (deduplicate by item name)
+    Produces: flags (hard failures), item_checks (per-item audit trail)
     """
     extracted = state.get("extracted") or {}
     log    = []
@@ -56,7 +62,8 @@ def run_validation(state: dict) -> dict:
         conn   = get_db()
         cursor = conn.cursor()
 
-        # Step 1: Check for invalid quantities first (data integrity)
+        # Step 1: Validate quantities first (data integrity violation)
+        # Non-positive quantities are structural errors - fail fast before accessing inventory
         invalid_items = []
         valid_items   = []
         for item in line_items:
@@ -69,14 +76,17 @@ def run_validation(state: dict) -> dict:
             else:
                 valid_items.append(item)
 
-        # Step 2: Sum quantities per item across all valid line items
+        # Step 2: Aggregate quantities per item
+        # One invoice may list the same item multiple times (e.g. regular qty, volume discount, replacement)
+        # Sum all quantities per unique item name for total stock check
         quantity_totals = defaultdict(float)
         for item in valid_items:
             name = item.get("description", "")
             qty  = item.get("quantity", 0)
             quantity_totals[name] += qty
 
-        # Step 3: Check each unique item against inventory
+        # Step 3: Validate aggregated items against inventory (deduplicate by name)
+        # checked_items prevents redundant DB lookups and duplicate flags for same item
         checked_items = set()
         for item in valid_items:
             name = item.get("description", "")
@@ -89,6 +99,8 @@ def run_validation(state: dict) -> dict:
             cursor.execute("SELECT stock FROM inventory WHERE item = ?", (name,))
             row = cursor.fetchone()
 
+            # Sequential validation: order matters for flag severity and error reporting
+            # 1. Unknown item is a data/configuration error
             if row is None:
                 flag = f"UNKNOWN_ITEM: '{name}' not found in inventory"
                 all_flags.append(flag)
@@ -102,6 +114,7 @@ def run_validation(state: dict) -> dict:
 
             stock = row[0]
 
+            # 2. Zero stock is a business process issue (procurement gap)
             if stock == 0:
                 flag = f"OUT_OF_STOCK: '{name}' has 0 units in stock"
                 all_flags.append(flag)
@@ -114,6 +127,7 @@ def run_validation(state: dict) -> dict:
                 })
                 continue
 
+            # 3. Excessive quantity is a business risk (insufficient stock for order, may need backorder)
             if total_qty > stock:
                 flag = (
                     f"STOCK_EXCEEDED: '{name}' total requested {total_qty} "
@@ -129,6 +143,7 @@ def run_validation(state: dict) -> dict:
                 })
                 continue
 
+            # All checks passed: item is valid and sufficient stock exists
             item_checks.append({
                 "item": name,
                 "quantity_requested": total_qty,
@@ -153,6 +168,7 @@ def run_validation(state: dict) -> dict:
             "errors": errors,
         }
 
+    # Overall result: passed only if zero flags (all items valid + sufficient stock)
     passed = len(all_flags) == 0
     status = "validated" if passed else "flagged"
 

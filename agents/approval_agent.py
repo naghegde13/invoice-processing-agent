@@ -44,10 +44,11 @@ and produce a final corrected decision.
 Respond ONLY with the same JSON schema. No markdown."""
 
 
-
 def safe_parse(text: str) -> dict:
+    # LLM responses may include markdown code blocks; strip them before parsing
     text = re.sub(r"```(?:json)?", "", text).strip().rstrip("`").strip()
     return json.loads(text)
+
 
 def check_invoice_aging(due_date: str) -> dict:
     from datetime import datetime
@@ -60,6 +61,7 @@ def check_invoice_aging(due_date: str) -> dict:
         due = datetime.strptime(due_date, "%Y-%m-%d").date()
         days = (due - today).days
         
+        # 3-day threshold = payment urgency flag, 7-day = early warning
         if days < 0:
             return {"status": "overdue", "days": abs(days), "message": f"OVERDUE by {abs(days)} days"}
         elif days <= 3:
@@ -120,7 +122,7 @@ def run_approval(state: dict) -> dict:
     if requires_vp:
         log.append(f"[Approval] High-value invoice (${amount:,.2f}) - elevated VP scrutiny required")
 
-    # Hard reject fast path for data integrity violations - no LLM needed
+    # Bypass LLM for unambiguous data integrity violations (faster, cheaper, deterministic)
     hard_reject_keywords = ["INVALID_QUANTITY", "INVALID_PRICE"]
     hard_rejects = [f for f in flags if any(k in f for k in hard_reject_keywords)]
     if hard_rejects:
@@ -160,7 +162,7 @@ def run_approval(state: dict) -> dict:
             "errors": errors,
         }
 
-    # Self-critique loop
+    # Two-pass approach: critique catches LLM biases (e.g., overly strict or lenient rejections)
     try:
         critique_prompt = (
             f"Original invoice context:\n{prompt}\n\n"

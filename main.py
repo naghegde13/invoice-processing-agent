@@ -43,6 +43,7 @@ def print_result(state: dict):
     print(f"  Amount:   ${extracted.get('amount', 0):,.2f}")
     print(f"  Due Date: {extracted.get('due_date', 'N/A')}")
     
+    # Invoice aging visualization: overdue (red) > critical/soon (yellow) > normal (green)
     if extracted.get("due_date"):
         from agents.approval_agent import check_invoice_aging
         aging = check_invoice_aging(extracted.get("due_date", ""))
@@ -50,10 +51,13 @@ def print_result(state: dict):
         print(f"  Aging: {aging['message']} {aging_emoji}")
     
     print(f"  Confidence: {extracted.get('extraction_confidence', 'N/A')}")
+    
+    # Display fraud assessment if present: combines score, recommendation, and individual signals
     fraud = state.get("fraud") or {}
     if fraud:
         rec = fraud.get("recommendation", "")
         fscore = fraud.get("score", "N/A")
+        # Fraud risk color coding: high_risk (red) > suspicious (yellow) > clear (green)
         color = "🔴" if rec == "high_risk" else "🟡" if rec == "suspicious" else "🟢"
         print(f"  Fraud Score: {fscore}/10 {color} ({rec})")
         for sig in fraud.get("signals", []):
@@ -107,6 +111,8 @@ def write_summary_report(states: list, results: dict):
         "INVOICE DETAILS:",
         "",
     ]
+    # Generate detailed audit trail: per-invoice summary with extraction confidence,
+    # fraud signals, validation flags, and transaction IDs for full traceability
     for state in states:
         ext = state.get("extracted") or {}
         status = state.get("status", "unknown").upper()
@@ -119,13 +125,17 @@ def write_summary_report(states: list, results: dict):
         fraud_score = (state.get("fraud") or {}).get("score", None)
         txn = (state.get("payment") or {}).get("transaction_id", "")
         lines.append(f"  {inv} | {vendor} | ${amount:,.2f} | {status} | confidence: {confidence}")
+        
+        # Include fraud assessment details if fraud check was performed
         if fraud_score is not None:
             lines.append(f"    FRAUD SCORE: {fraud_score}/10 ({(state.get('fraud') or {}).get('recommendation', '')})")
             for sig in fraud_signals:
                 lines.append(f"    FRAUD SIGNAL: {sig}")
+            # Include validation flags only if invoice reached validation stage
             if flags:
                 for f in flags:
                     lines.append(f"    FLAG: {f}")
+            # Include transaction ID to link to payment system audit logs
             if txn:
                 lines.append(f"    TXN: {txn}")
         lines.append("")
@@ -138,10 +148,13 @@ def write_summary_report(states: list, results: dict):
 def run_single(invoice_path: str):
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Processing: {invoice_path}")
     try:
+        # Process invoice through full LangGraph pipeline
         state = process_invoice(invoice_path)
         print_result(state)
         return state
     except Exception as e:
+        # Catch-all error handling: print traceback for debugging, return None to halt batch
+        # Prevents cascading failures in run_all(): returns None when exception encountered
         import traceback
         traceback.print_exc()
         print(f"\n💥 Fatal error processing {invoice_path}: {e}")
@@ -167,12 +180,18 @@ def run_all():
     print(f"  BATCH RUN: {len(files)} invoices")
     print(f"{'='*60}")
 
+    # Result aggregation: track outcomes for summary metrics
+    # Keys: paid, rejected, duplicate, error represent terminal state outcomes
     results = {"paid": 0, "rejected": 0, "error": 0, "duplicate": 0}
     all_states = []
+    
+    # Sequential processing with state collection and result categorization
     for path in files:
         state = run_single(path)
         if state:
             all_states.append(state)
+            # Categorize by terminal status: paid (success), rejected (approval denied),
+            # duplicate (already processed), or error (data/system issue)
             s = state.get("status", "error")
             if s == "paid":
                 results["paid"] += 1
@@ -198,10 +217,12 @@ def main():
     parser.add_argument("--run_all", action="store_true", help="Process all invoices in data/invoices/")
     args = parser.parse_args()
 
+    # Routing: require at least one mode (single or batch)
     if not args.invoice_path and not args.run_all:
         parser.print_help()
         sys.exit(1)
 
+    # Mutually exclusive workflows: single invoice vs. batch processing
     if args.run_all:
         run_all()
     else:

@@ -11,6 +11,7 @@ LangGraph 1.1.6 pattern:
 import re
 
 
+# Language patterns indicating pressure tactics (common in invoice fraud/phishing)
 URGENCY_PATTERNS = [
     r"pay immediately",
     r"urgent",
@@ -29,6 +30,11 @@ SUSPICIOUS_VENDOR_WORDS = [
 
 
 def score_fraud(raw_text: str, extracted: dict) -> dict:
+    """
+    Weighted scoring model: detects invoice fraud signals.
+    Score aggregation: individual signals contribute fixed weights, capped at 10.0.
+    Rationale: urgency + missing data + round amounts are common in social engineering attacks.
+    """
     signals = []
     score = 0.0
 
@@ -45,7 +51,7 @@ def score_fraud(raw_text: str, extracted: dict) -> dict:
     for word in SUSPICIOUS_VENDOR_WORDS:
         if word in vendor:
             signals.append(f"SUSPICIOUS_VENDOR: vendor name contains '{word}'")
-            score += 2.5
+            score += 2.5  # Vendor issues weighted higher (direct trust signal)
 
     # Check for email-style invoice (billing@ in raw text)
     if re.search(r'[\w.]+@[\w.]+', raw_text):
@@ -63,7 +69,8 @@ def score_fraud(raw_text: str, extracted: dict) -> dict:
         signals.append("MISSING_VENDOR: no vendor name found")
         score += 1.5
 
-    # Check suspiciously round large amounts
+    # Heuristic: large round amounts often indicate generated/placeholder invoices
+    # Real invoices typically have taxed amounts or specific line-item totals (e.g., $10,347.82)
     amount = extracted.get("amount", 0)
     if amount >= 10000 and amount % 1000 == 0:
         signals.append(f"ROUND_AMOUNT: amount ${amount:,.0f} is a suspiciously round number")
@@ -76,6 +83,7 @@ def score_fraud(raw_text: str, extracted: dict) -> dict:
 
     score = min(round(score, 1), 10.0)
 
+    # Thresholds: 8+ = immediate rejection (fraud confidence), 4-7 = flag for manual review, <4 = proceed
     if score >= 8:
         recommendation = "high_risk"
     elif score >= 4:
@@ -114,7 +122,8 @@ def run_fraud_check(state: dict) -> dict:
 
     log.append(f"[Fraud] Score: {score}/10 | Recommendation: {recommendation}")
 
-    # Fast reject if high risk
+    # Fast-exit if high fraud risk: prevents downstream abuse of validation/approval workflow
+    # If invoice is likely malicious, no point validating line items or involving approval process
     if recommendation == "high_risk":
         log.append(f"[Fraud] HIGH RISK - fast rejecting without further processing")
         return {

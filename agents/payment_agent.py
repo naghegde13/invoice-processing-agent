@@ -18,6 +18,8 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "inventory.db
 
 
 def mock_payment(vendor: str, amount: float) -> dict:
+    # Generate deterministic-looking transaction ID: TXN-{8 hex chars}
+    # Format: easily scannable for audit logs, unique per call
     transaction_id = f"TXN-{uuid.uuid4().hex[:8].upper()}"
     print(f"[PaymentAPI] Paid ${amount:,.2f} to {vendor} | TXN: {transaction_id}")
     return {
@@ -42,6 +44,7 @@ def log_to_db(extracted: dict, approval: dict, validation: dict, status: str):
             extracted.get("vendor", ""),
             extracted.get("amount", 0),
             status,
+            # Combine critical flags + warnings into single audit field (both affect reject decision)
             json.dumps(validation.get("flags", []) + validation.get("warnings", [])),
             approval.get("reasoning", ""),
             datetime.utcnow().isoformat(),
@@ -56,6 +59,8 @@ def run_payment(state: dict) -> dict:
     """
     Reads:   extracted, approval, validation, status
     Returns: payment, status, log, errors
+    
+    Routes based on approval status: approved -> execute mock payment, otherwise -> log rejection
     """
     extracted  = state.get("extracted")  or {}
     approval   = state.get("approval")   or {}
@@ -65,6 +70,7 @@ def run_payment(state: dict) -> dict:
     errors = []
 
     if current_status == "approved":
+        # Approved path: create transaction record and mark invoice as paid
         log.append("[Payment] Invoice approved - initiating payment...")
         vendor = extracted.get("vendor", "Unknown")
         amount = extracted.get("amount", 0.0)
@@ -84,6 +90,7 @@ def run_payment(state: dict) -> dict:
         }
 
     else:
+        # Rejected path: no payment, but structurally return rejection reason + validation flags for audit
         reason = approval.get("reasoning", "No reasoning provided")
         flags  = validation.get("flags", [])
 
