@@ -84,7 +84,6 @@ def build_approval_prompt(extracted: dict, validation: dict) -> str:
         f"Vendor: {extracted.get('vendor', 'Unknown')}",
         f"Total Amount: ${amount:,.2f}",
         f"Due Date: {extracted.get('due_date', 'N/A')}",
-        f"Invoice Aging: {check_invoice_aging(extracted.get('due_date', '')).get('message')}",
         f"High-Value (>$10K): {'YES - requires extra scrutiny' if amount > HIGH_VALUE_THRESHOLD else 'No'}",
         "",
         "Line Items:",
